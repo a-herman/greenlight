@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: var(--font-inter), 'Inter', ui-sans-serif, system-ui, sans-serif;
+
+  /* Brand */
+  --color-accent:      #A100FF;
+  --color-accent-dark: #7B00CC;
+  --color-accent-soft: #F5EDFF;
+
+  /* Text scale */
+  --color-ink:       #1A1A1A;
+  --color-secondary: #6B6B6B;
+  --color-tertiary:  #9B9B9B;
+
+  /* Surfaces */
+  --color-page:    #FAFAFA;
+  --color-surface: #FFFFFF;
+  --color-divider: #E5E5E5;
+
+  /* Status — solid (Pass / Conditional / Fail / Needs info) */
+  --color-ok:    #A100FF;
+  --color-warn:  #D5A6FF;
+  --color-danger:#FF52A0;
+  --color-info:  #93C5FD;
+
+  /* Status — soft tints */
+  --color-ok-soft:    #F5EDFF;
+  --color-warn-soft:  #F5EDFF;
+  --color-danger-soft:#FFE4F0;
+  --color-info-soft:  #DBEAFE;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  background: #FAFAFA;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}

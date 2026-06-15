@@ -1,6 +1,6 @@
 # Greenlight — Product Requirements Document
 
-**Version:** 1.0  
+**Version:** 2.0  
 **Date:** June 2026  
 **Owner:** Andrew Herman, Accenture  
 **Status:** Draft for development team review
@@ -25,8 +25,13 @@
 14. [Data Model](#14-data-model)
 15. [API Endpoints](#15-api-endpoints)
 16. [Non-Functional Requirements](#16-non-functional-requirements)
-17. [Out of Scope — MVP](#17-out-of-scope--mvp)
-18. [Future Releases](#18-future-releases)
+17. [Out of Scope](#17-out-of-scope)
+18. [AI Policy Evaluation Agent](#18-ai-policy-evaluation-agent)
+19. [Reviewer Assignment](#19-reviewer-assignment)
+20. [Notifications](#20-notifications)
+21. [Report Export](#21-report-export)
+22. [Settings Page](#22-settings-page)
+23. [Azure AD / SSO Integration](#23-azure-ad--sso-integration)
 
 ---
 
@@ -44,7 +49,7 @@ Accenture deploys Microsoft 365 Copilot to tens of thousands of employees. Micro
 - Reviewers have no single place to see what needs attention
 - There is no consistent record of why a feature was approved or blocked
 
-### 1.3 Core Workflow (MVP)
+### 1.3 Core Workflow
 
 ```
 Microsoft ships a new Copilot feature
@@ -53,11 +58,15 @@ Admin adds it to Greenlight's feature catalog
         ↓
 Greenlight creates policy checks for the feature (based on the active policy library)
         ↓
-Reviewers evaluate each check — marking Pass / Fail / Conditional / Needs Info
+AI agent automatically searches approved sources, evaluates each check,
+and populates findings + evidence with a confidence score
+        ↓
+Reviewers review AI findings, correct where needed, and mark checks
+Pass / Fail / Conditional / Needs Info
         ↓
 Governance admin makes a final decision: Approve / Hold / Conditional
         ↓
-Decision is logged in the audit trail
+Decision is logged in the audit trail; report exported for stakeholders
         ↓
 Feature status is visible on the dashboard
 ```
@@ -120,42 +129,28 @@ Feature status is visible on the dashboard
 
 ## 4. Release Scope
 
-### MVP (Release 1)
+### Single Release — Full Scope
 
-The MVP delivers a complete manual governance workflow. A governance team can track every Copilot feature, record policy check outcomes, make approval decisions, and maintain a full audit trail — all without AI assistance.
+Greenlight is built as a complete, production-ready governance platform in a single release. All capabilities — manual review workflow, AI-assisted evaluation, reviewer collaboration, notifications, reporting, and enterprise authentication — are in scope.
 
 **In scope:**
-- Authentication with role-based access
-- Dashboard (feature queue, status, pass rates)
-- Feature detail pages with editable check status and findings
-- Feature approval actions (Approve / Hold / Request Info)
-- Feature catalog admin
-- Policy library (bulk import + individual rule CRUD)
+- Authentication with role-based access (email/password and Azure AD / Entra ID SSO)
+- Dashboard with KPI cards, filters, and check distribution chart
+- Feature detail pages with editable check status, findings, recommendations, and evidence
+- Feature approval actions (Approve / Hold / Conditional) with reason notes and audit trail
+- Feature catalog admin (add, edit, sync, remove)
+- Policy library: bulk import from Excel, individual rule CRUD, version history
 - Approved sources admin
-- Basic audit log
-
-**Not in scope for MVP:** See [Section 17](#17-out-of-scope--mvp)
-
-### Release 2 — AI-Assisted Evaluation
-
-An AI agent automatically runs policy checks for each feature by searching approved sources and evaluating findings against pass/fail criteria. This replaces the manual evidence-gathering step.
-
-**Additions:**
-- AI agent integration (Claude or OpenAI with web_search tool)
-- Auto-run policy checks per feature
-- Auto-populate findings and evidence
-- Confidence scores and agent run history
-- Re-evaluation triggers when policy updates or new Microsoft announcements are detected
-
-### Release 3 — Enterprise Collaboration
-
-**Additions:**
-- Reviewer assignment (assign specific reviewers to features by governance function)
-- Email / Microsoft Teams notifications
-- PDF and Excel report export
-- Settings page (org name, logo, notification preferences, user management)
-- Full audit log UI with advanced filtering and export
-- Role provisioning via Azure AD groups
+- Audit log with full-text search, filtering, and export
+- **AI agent:** automated policy check evaluation via web search restricted to approved sources (see [Section 18](#18-ai-policy-evaluation-agent))
+- Confidence scores and agent run history per feature
+- Re-evaluation automation when policy versions are updated
+- **Reviewer assignment:** assign specific users per governance function per feature (see [Section 19](#19-reviewer-assignment))
+- Email and Microsoft Teams notifications for key governance events (see [Section 20](#20-notifications))
+- PDF report export per feature (cover page, check outcomes, evidence, approval decision) (see [Section 21](#21-report-export))
+- Excel report export (policy library download)
+- Settings page — organization profile, user management, notification configuration, AI agent config, SSO setup (see [Section 22](#22-settings-page))
+- Azure AD / Entra ID SSO with group-to-role mapping (see [Section 23](#23-azure-ad--sso-integration))
 
 ---
 
@@ -276,11 +271,12 @@ All routes except `/login` require authentication. Unauthenticated users are red
 | `/admin/*` | Admin only — Reviewers and Viewers get a 403 page |
 | `/audit-log` | Admin and Reviewer |
 
-### 6.5 User Management (MVP — minimal)
+### 6.5 User Management
 
-- Admin can create/delete user accounts via a simple admin-only page at `/admin/users`
-- Fields: name, email, password (hashed), role (Admin / Reviewer / Viewer)
-- No email verification or self-serve registration in MVP
+- Admin manages user accounts in Settings → Users (see [Section 22.7](#227-users))
+- Fields: name, email, password (hashed), role (Admin / Reviewer / Viewer), `fallback_auth_allowed`
+- Invite flow: Admin sends an invitation email with a one-time setup link
+- Azure AD sync: when SSO is configured, users can be provisioned automatically from AD groups (see [Section 23](#23-azure-ad--sso-integration))
 
 ---
 
@@ -810,7 +806,7 @@ The xlsx parser must handle real-world governance checklists that may not follow
 
 ### 12.1 Purpose
 
-Maintains the list of approved domains that reviewers are permitted to cite as evidence when evaluating policy checks. In Release 2, this list also restricts which domains the AI agent can search.
+Maintains the list of approved domains that reviewers are permitted to cite as evidence when evaluating policy checks. This list also restricts which domains the AI agent searches when running automated evaluations (see [Section 18](#18-ai-policy-evaluation-agent)).
 
 ### 12.2 Page Layout
 
@@ -995,6 +991,90 @@ CREATE TABLE feature_status_history (
 );
 ```
 
+#### `policy_checks` additions (source + confidence)
+```sql
+ALTER TABLE policy_checks ADD COLUMN source     TEXT NOT NULL DEFAULT 'human';  -- 'human' | 'ai'
+ALTER TABLE policy_checks ADD COLUMN confidence REAL;  -- 0.0–1.0; null for human-entered checks
+```
+
+#### `agent_runs` (NEW)
+Records each AI evaluation run against a feature:
+```sql
+CREATE TABLE agent_runs (
+  id               TEXT PRIMARY KEY,
+  feature_id       TEXT NOT NULL REFERENCES features(id),
+  triggered_by     TEXT NOT NULL,           -- user id or 'system'
+  trigger_reason   TEXT NOT NULL,           -- 'manual' | 'feature_added' | 'policy_updated' | 'scheduled'
+  model            TEXT NOT NULL,           -- e.g. 'claude-opus-4-8'
+  status           TEXT NOT NULL,           -- 'running' | 'completed' | 'failed'
+  checks_evaluated INTEGER NOT NULL DEFAULT 0,
+  checks_updated   INTEGER NOT NULL DEFAULT 0,
+  input_tokens     INTEGER,
+  output_tokens    INTEGER,
+  error_message    TEXT,
+  started_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  completed_at     TEXT
+);
+```
+
+#### `agent_check_evaluations` (NEW)
+Per-check results recorded within each agent run:
+```sql
+CREATE TABLE agent_check_evaluations (
+  id              TEXT PRIMARY KEY,
+  run_id          TEXT NOT NULL REFERENCES agent_runs(id),
+  check_id        TEXT NOT NULL REFERENCES policy_checks(id),
+  status_assigned TEXT NOT NULL,           -- Pass | Fail | Conditional | Needs Info
+  confidence      REAL NOT NULL,           -- 0.0–1.0
+  finding_text    TEXT NOT NULL DEFAULT '',
+  search_queries  TEXT NOT NULL DEFAULT '[]',  -- JSON array of queries used
+  sources_visited TEXT NOT NULL DEFAULT '[]',  -- JSON array of URLs visited
+  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
+#### `feature_reviewer_assignments` (NEW)
+Maps reviewers to features by governance function (one row per feature+function):
+```sql
+CREATE TABLE feature_reviewer_assignments (
+  id          TEXT PRIMARY KEY,
+  feature_id  TEXT NOT NULL REFERENCES features(id),
+  user_id     TEXT NOT NULL REFERENCES users(id),
+  function    TEXT NOT NULL CHECK (function IN ('INFOSEC', 'IT', 'LEGAL')),
+  assigned_by TEXT NOT NULL REFERENCES users(id),
+  assigned_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (feature_id, function)
+);
+```
+
+#### `notification_events` (NEW)
+Events queued for in-app and external delivery:
+```sql
+CREATE TABLE notification_events (
+  id           TEXT PRIMARY KEY,
+  recipient_id TEXT NOT NULL REFERENCES users(id),
+  event_type   TEXT NOT NULL,              -- see Section 20 for types
+  subject      TEXT NOT NULL,
+  body         TEXT NOT NULL,
+  feature_id   TEXT,                       -- null for non-feature events
+  sent_email   INTEGER NOT NULL DEFAULT 0, -- boolean
+  sent_teams   INTEGER NOT NULL DEFAULT 0, -- boolean
+  read_at      TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
+#### `settings` (NEW)
+Key-value store for organization-wide configuration:
+```sql
+CREATE TABLE settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_by TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
 ---
 
 ## 15. API Endpoints
@@ -1034,6 +1114,83 @@ CREATE TABLE feature_status_history (
 - `GET /api/audit-log` — Query audit log entries
   - Query params: `from`, `to`, `actor`, `event_type`, `resource_type`, `resource_id`, `q`, `limit`, `offset`
   - Returns: `{ entries: [...], total: N }`
+- `GET /api/audit-log/export` — Download audit log as Excel
+  - Query params: same as above; streams a `.xlsx` file
+
+### New — AI Agent
+
+- `POST /api/features/[id]/evaluate` — Trigger AI evaluation run
+  - Body: `{ reset_human_overrides?: boolean }`
+  - Auth: Admin only
+  - Creates an `agent_runs` record, queues the evaluation job
+  - Returns: `{ run_id: string }`
+
+- `GET /api/features/[id]/agent-runs` — List agent run history for a feature
+  - Auth: Admin + Reviewer
+  - Returns: `{ runs: AgentRun[] }`
+
+- `GET /api/agent-runs/[runId]` — Get run details including per-check evaluations
+  - Auth: Admin + Reviewer
+  - Returns: `AgentRun & { evaluations: AgentCheckEvaluation[] }`
+
+- `POST /api/checks/[id]/reset-to-ai` — Allow AI to overwrite a manually-overridden check on next run
+  - Auth: Admin only
+
+### New — Reviewer Assignment
+
+- `GET /api/features/[id]/assignments` — List reviewer assignments for a feature
+  - Auth: Admin + Reviewer
+  - Returns: `{ assignments: ReviewerAssignment[] }`
+
+- `PUT /api/features/[id]/assignments/[function]` — Assign or replace a reviewer
+  - Body: `{ user_id: string }`
+  - Auth: Admin only
+  - On success: sends assignment notification if notifications are enabled
+
+- `DELETE /api/features/[id]/assignments/[function]` — Remove reviewer assignment
+  - Auth: Admin only
+
+### New — Notifications
+
+- `GET /api/notifications` — List notifications for the authenticated user
+  - Query params: `unread_only?`, `limit?`, `offset?`
+  - Returns: `{ notifications: NotificationEvent[], unread_count: number }`
+
+- `PATCH /api/notifications/[id]/read` — Mark a notification as read
+
+- `POST /api/notifications/mark-all-read` — Mark all notifications as read for the current user
+
+### New — Reports
+
+- `GET /api/reports/features/[id]/pdf` — Generate and download PDF governance report
+  - Auth: Admin + Reviewer
+  - Response: `application/pdf`; file name: `greenlight-[feature-id]-[date].pdf`
+
+- `GET /api/reports/features/[id]/excel` — Generate and download Excel report for a feature
+  - Auth: Admin + Reviewer
+  - Response: `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
+
+### New — Settings
+
+- `GET /api/settings` — Get all settings (org, auth, notifications, agent config)
+  - Auth: Admin only
+  - Returns: `Record<string, string>`
+
+- `PATCH /api/settings` — Update one or more settings
+  - Body: `Record<string, string>`
+  - Auth: Admin only
+
+- `POST /api/settings/test-sso` — Validate Azure AD SSO configuration without saving
+  - Auth: Admin only
+
+- `POST /api/settings/test-notifications` — Send a test notification to configured channels
+  - Auth: Admin only
+
+### New — Azure AD / SSO
+
+- `GET /api/auth/sso/azure` — Initiate Microsoft SSO (PKCE flow); redirects to Microsoft's authorization endpoint
+
+- `GET /api/auth/sso/azure/callback` — Handle OAuth callback: validate state, exchange code, provision user, create session; redirects to `/` on success
 
 ---
 
@@ -1074,60 +1231,362 @@ CREATE TABLE feature_status_history (
 
 ---
 
-## 17. Out of Scope — MVP
+## 17. Out of Scope
 
-The following are explicitly NOT included in the MVP and should not be built until the releases specified:
+The following capabilities are explicitly not planned for any release:
 
-| Capability | Target release |
+| Capability | Reason |
 |---|---|
-| AI agent for automated policy check evaluation | Release 2 |
-| Web search integration (approved sources used by AI) | Release 2 |
-| Re-evaluation automation when policy changes | Release 2 |
-| Confidence scores per check | Release 2 |
-| Reviewer assignment / ownership | Release 3 |
-| Email or Teams notifications | Release 3 |
-| PDF / Excel report export | Release 3 |
-| Advanced audit log filtering and export | Release 3 |
-| Settings page | Release 3 |
-| Self-serve user registration | Release 3 |
-| Azure AD / SSO integration | Release 3 |
-| Multi-tenant / team workspaces | Release 3 |
-| Mobile / tablet responsive layout | Not planned |
+| Mobile / tablet responsive layout | Greenlight is a desktop-only admin and reviewer tool |
+| Multi-tenant / team workspaces | Single-tenant deployment scoped to Accenture's internal environment |
+| Microsoft Graph API write access (deploying or blocking Copilot features) | Greenlight records governance decisions; it does not control Microsoft 365 configuration directly |
+| Public API / webhooks for external system integration | Not required for initial deployment |
 
 ---
 
-## 18. Future Releases
+## 18. AI Policy Evaluation Agent
 
-### Release 2 — AI-Assisted Evaluation
+**Route:** Feature detail page (Run Evaluation button) + `/admin/settings` (Agent section)  
+**Access:** Trigger evaluation — Admin only. View results — Admin + Reviewer.
 
-The core idea: Greenlight's agent reads each policy rule's check question and search keywords, queries approved sources, retrieves relevant content, and evaluates findings against the pass/fail criteria. This removes the manual evidence-gathering burden from reviewers.
+### 18.1 Purpose
 
-**AI agent workflow:**
-1. Admin triggers evaluation for a feature (or it runs automatically when a feature is added)
-2. For each policy check on the feature:
-   a. Agent constructs a search query from `search_keywords` and `check_question`
-   b. Agent searches only `approved_sources` domains
-   c. Agent retrieves and reads relevant pages
-   d. Agent evaluates content against `pass_criteria`, `fail_criteria`, `unknown_criteria`
-   e. Agent sets check status, populates `finding`, adds `evidence` items with URLs and excerpts
-3. Agent writes a confidence score per check (0–1)
-4. Reviewers review AI-populated checks, correct where needed
-5. Admin makes final approval decision
+The AI agent reads each policy rule's check question, intent, and search keywords, then searches only approved source domains, reads relevant pages, evaluates content against the rule's pass/fail/unknown criteria, and writes findings and evidence directly into the feature's policy checks. This eliminates the manual evidence-gathering step for reviewers.
 
-**Requirements:**
-- Agent run must be triggerable manually per feature and also on a schedule
-- Each agent run is recorded with start time, duration, model used, token count
-- Checks updated by agent are marked with `source: 'ai'`; checks manually overridden are marked `source: 'human'`
-- Human overrides take precedence and are not overwritten by subsequent agent runs unless explicitly reset
+### 18.2 Trigger Modes
 
-### Release 3 — Enterprise Collaboration
+| Trigger | Who | When |
+|---|---|---|
+| Manual per feature | Admin | "Run evaluation" button on feature detail page |
+| Automatic on add | System | When a new feature is added to the catalog (configurable off) |
+| Policy update trigger | System | When a new policy version is committed with "Re-evaluate all features" checked |
+| Scheduled | System | Configurable weekly schedule set in Settings → Agent |
 
-**Reviewer assignment:** Each feature is assigned specific reviewers per governance function (InfoSec reviewer, Legal reviewer, IT reviewer). Only assigned reviewers can update checks in their function.
+### 18.3 Per-Check Evaluation Workflow
 
-**Notifications:** When a feature is assigned for review, the assigned reviewer receives an email or Teams message. When all checks in a reviewer's function are complete, the admin is notified.
+For each active policy check on the feature, ordered by severity (High → Medium → Low):
 
-**Reporting:** Export a feature's full governance record as a PDF (cover page, check outcomes, evidence list, approval decision, signatories). Export the full policy library as Excel.
+1. Construct a search query combining the rule's `search_keywords` and the feature name
+2. Search only domains in the `approved_sources` list
+3. Retrieve and read the most relevant pages (configurable max; default 5 per check)
+4. Evaluate page content against `pass_criteria`, `fail_criteria`, and `unknown_criteria`
+5. Select the verdict that best fits the evidence
+6. Write a concise `finding` summarizing what was found and why the verdict was chosen
+7. Add `evidence` items: URL, title, excerpt, accessed date
+8. Assign a `confidence` score (0.0–1.0) reflecting how strongly the evidence supports the verdict
 
-**Settings:** Admin UI for org name, logo upload, notification preferences, SMTP configuration.
+### 18.4 Human Override Behavior
 
-**Azure AD integration:** Map Azure AD groups to Greenlight roles. Users log in with their Accenture Microsoft account (SSO).
+- All checks populated by the agent are flagged `source: 'ai'` with a confidence score
+- When a reviewer or admin manually changes a check's status, finding, or recommendation, the check becomes `source: 'human'`
+- Subsequent agent runs **do not overwrite** `source: 'human'` checks
+- Admin can click "Reset to AI" on an individual check to re-enable AI overwriting on the next run
+- Before triggering a manual run, admin can check "Reset all human overrides" to force full re-evaluation
+
+### 18.5 Agent Run Record
+
+Every run creates an `agent_runs` record with: feature ID, triggered by, trigger reason, model used, status (running / completed / failed), checks evaluated, checks updated, token counts, error message, start time, completion time.
+
+### 18.6 UI — Feature Detail Page
+
+**"Run evaluation" button (Admin only)**  
+Located in the feature header action bar. If a run is already in progress, shows "Evaluating…" (spinner, disabled). Clicking opens a small popover:
+- "This will auto-fill checks that haven't been manually overridden."
+- Checkbox: "Reset human overrides and re-evaluate all checks"
+- "Start evaluation" / Cancel buttons
+
+**Agent status bar**  
+Shown below the pass rate summary when any run exists for the feature:  
+`Last evaluated: {relative time} · {N} checks updated · {model} · Avg confidence: {score}`  
+"View run history" link opens the agent runs panel.
+
+**Agent runs panel (expandable section or slide-out)**  
+Lists all runs for the feature, newest first. Each row: timestamp, triggered by, status badge, checks evaluated, checks updated, duration. Clicking expands per-check evaluations from that run.
+
+**AI vs. human indicator on check rows**  
+- Checks set by the agent show a sparkle icon and a confidence badge (e.g. "87%")
+- Manually overridden checks show a "Manually reviewed" label
+- "Reset to AI" micro-action available to Admin on AI-evaluated checks
+
+### 18.7 Agent Settings (in `/admin/settings` → Agent)
+
+| Setting | Control | Default |
+|---|---|---|
+| AI model | Select: claude-opus-4-8 / claude-sonnet-4-6 / claude-haiku-4-5 | claude-opus-4-8 |
+| Max sources per check | Number input (1–20) | 5 |
+| Confidence threshold (auto-pass) | Number input (0.0–1.0) | 0.90 |
+| Auto-evaluate on new feature | Toggle | On |
+| Scheduled re-evaluation | Toggle + day + time picker | Off |
+| Anthropic API key | Password input (encrypted at rest) | — |
+
+---
+
+## 19. Reviewer Assignment
+
+**Route:** Feature detail page — Audit Sidebar (Reviewers section)  
+**Access:** Assign — Admin only. View assignments — all authenticated users.
+
+### 19.1 Purpose
+
+Each feature can have one assigned reviewer per governance function. Assigned reviewers receive notifications, are highlighted on the dashboard, and (when enforced) are the only Reviewers who can update checks in their function on that feature.
+
+### 19.2 Data Model
+
+`feature_reviewer_assignments` — one row per (feature_id, function) pair. Assigning a different user to a function replaces the existing row.
+
+### 19.3 UI — Feature Detail Page (Audit Sidebar)
+
+**Reviewers card** (new section below Review Status in the right-rail sidebar):
+
+```
+┌─ Reviewers ─────────────────────────────────────────────┐
+│ InfoSec         Marcus Chen         [Change] [×]        │
+│ IT & Arch       Priya Sharma        [Change] [×]        │
+│ Legal & Privacy (unassigned)        [+ Assign]          │
+└──────────────────────────────────────────────────────────┘
+```
+
+- Clicking "Assign" or "Change" opens an inline dropdown populated with Reviewer and Admin-role users
+- Selecting a user and confirming calls `PUT /api/features/[id]/assignments/[function]`
+- If notifications are enabled, an assignment email/Teams message is sent immediately
+- × removes the assignment
+
+### 19.4 Dashboard — Assigned Features
+
+For the current user, features they are assigned to show an "Assigned to you" pill on the feature card. Reviewer users see a "My assignments" quick-filter in the dashboard filter bar.
+
+### 19.5 Role-Based Check Editing Enforcement
+
+When assignments are configured (and enforcement is enabled in Settings):
+- Reviewer users can only edit checks in functions they are assigned to on that specific feature
+- Unassigned function checks are greyed out in the UI with a tooltip: "Assigned to [Name]" or "Unassigned — contact Admin"
+- Admins always retain full edit access regardless of assignment
+
+---
+
+## 20. Notifications
+
+**Access:** Notification preferences — user profile. Infrastructure config — Settings → Notifications.
+
+### 20.1 Purpose
+
+Keep reviewers and admins informed of key governance events without requiring continuous dashboard monitoring. Delivered in-app (bell icon) and optionally via email and/or Microsoft Teams.
+
+### 20.2 Notification Types
+
+| Event type | Recipients | Message |
+|---|---|---|
+| `feature.assigned` | Assigned reviewer | "You've been assigned to review [Feature] — [Function] checks" |
+| `feature.approved` | All assigned reviewers | "[Feature] has been approved for deployment" |
+| `feature.held` | All assigned reviewers | "[Feature] has been blocked by [Admin Name]" |
+| `feature.conditional` | All assigned reviewers | "[Feature] has been conditionally approved" |
+| `function.complete` | Admin | "All [Function] checks for [Feature] are now complete" |
+| `check.flagged_fail` | Admin + assigned function reviewer | "[Check title] has been marked Fail on [Feature]" |
+| `policy.version_imported` | All Reviewers | "New policy version [label] imported — [N] rules changed" |
+| `agent.evaluation_complete` | Admin | "AI evaluation of [Feature] complete — [N] checks updated" |
+| `agent.evaluation_failed` | Admin | "AI evaluation of [Feature] failed: [error summary]" |
+
+### 20.3 Delivery Channels
+
+**In-app:** Bell icon in the top nav bar with unread count badge. Clicking opens a panel (newest first) with icon, subject, relative timestamp, and a link to the relevant page. "Mark as read" per notification and "Mark all as read" bulk action.
+
+**Email:** One email per event to each recipient. Includes a "View in Greenlight" link. Sent via configured SMTP or SendGrid.
+
+**Microsoft Teams:** Adaptive Card per event sent via an incoming webhook URL. Includes event details and a "View in Greenlight" button.
+
+### 20.4 User Notification Preferences
+
+Each user can toggle notification delivery per channel (In-app / Email / Teams) per event type in their profile settings. "Quiet hours" option suppresses email and Teams delivery during specified hours; in-app notifications are still created.
+
+### 20.5 Constraints
+
+- Admins cannot disable `agent.evaluation_failed` notifications
+- In-app notifications are always created regardless of channel preferences
+- If email or Teams is not configured in Settings, those delivery channels are silently skipped
+
+---
+
+## 21. Report Export
+
+**Access:** Admin + Reviewer
+
+### 21.1 Purpose
+
+Export a feature's complete governance record as PDF for stakeholder distribution, or export the policy library as Excel for offline reference.
+
+### 21.2 PDF Governance Report (per feature)
+
+**Trigger:** "Export PDF" button on the feature detail page (top-right action area).  
+**File name:** `greenlight-[feature-id]-[YYYY-MM-DD].pdf`
+
+**Content:**
+
+**Cover page:**
+- Greenlight wordmark + organization name and logo
+- Feature name, type badge, current status (large)
+- Report generated date and time
+- Overall pass rate + function-level breakdown
+
+**Executive Summary:**
+- Feature metadata (product, version, risk level, Microsoft owner)
+- Approval decision, deciding admin name, date, reason note
+- Policy check summary table: per governance function — total, passed, failed, conditional, needs info; overall pass rate bar
+
+**Full Check Detail (one section per governance function):**
+- Each check: ID, title, status pill, confidence score (if AI-evaluated), finding text, recommendation text, evidence items (URL, title, excerpt)
+- AI-evaluated checks labeled with an AI badge
+
+**Audit Record (final page):**
+- Chronological list of all audit events for the feature
+- Reviewer assignments at time of report
+- Agent run history summary
+
+**Format:** PDF, A4/Letter. Accent color `#A100FF` used for section headers. System sans-serif or embedded font matching the UI.
+
+### 21.3 Excel Policy Library Export
+
+Already partially implemented via `GET /api/policies/template`. Produces an Excel file in the same format as the import template with all current active rules. Enhancements needed:
+- Cover sheet with: version label, export date, rule count, column name legend
+- Used for offline reference, re-importing after manual edits, or sharing with external reviewers
+
+---
+
+## 22. Settings Page
+
+**Route:** `/admin/settings`  
+**Access:** Admin only
+
+### 22.1 Purpose
+
+Central console for configuring Greenlight's organization profile, authentication, AI agent, notifications, and user management.
+
+### 22.2 Page Layout
+
+```
+[Breadcrumb]
+[Page title: "Settings"]
+[Left sidebar nav: Organization · Authentication · Agent · Notifications · Users]
+[Right: active section form card]
+[Save changes button per section]
+```
+
+### 22.3 Organization
+
+| Field | Control | Notes |
+|---|---|---|
+| Organization name | Text input | Shown in nav bar and PDF report cover |
+| Organization logo | File upload (PNG/SVG ≤ 500 KB) | Shown in nav bar and PDF cover |
+| Support email | Email input | "From" address for notification emails |
+| Greenlight base URL | URL input | Used in email/Teams notification links |
+
+### 22.4 Authentication
+
+| Field | Control | Notes |
+|---|---|---|
+| Session duration | Number + unit select (hours/days) | Default: 8 hours |
+| "Remember me" duration | Number + unit select | Default: 30 days |
+| Azure AD tenant ID | Text input | From Azure AD app registration |
+| Azure AD client ID | Text input | From Azure AD app registration |
+| Azure AD client secret | Password input (masked, encrypted at rest) | |
+| Group → role mapping | Table: Group ID/Name → Admin/Reviewer/Viewer | Add/remove rows |
+| Test SSO connection | Button | Validates config, shows success or error inline |
+| Disable email/password login | Toggle | Except for accounts marked `fallback_auth_allowed` |
+
+### 22.5 Agent
+
+See [Section 18.7](#187-agent-settings-in-adminsettings--agent) for the full field list.
+
+### 22.6 Notifications
+
+| Field | Control | Notes |
+|---|---|---|
+| Enable email | Toggle | Master switch — off = no emails sent |
+| SMTP host | Text input | e.g. `smtp.sendgrid.net` |
+| SMTP port | Number input | e.g. `587` |
+| SMTP username | Text input | |
+| SMTP password | Password input (encrypted at rest) | |
+| From address | Email input | |
+| Enable Teams | Toggle | Master switch |
+| Teams webhook URL | URL input | Incoming webhook from a Teams channel |
+| Send test notification | Button | Sends a sample event to configured channels |
+
+### 22.7 Users
+
+Embedded user management (replaces a standalone `/admin/users` page).
+
+**User table columns:** Name · Email · Role (editable select) · Last login · Status · Actions (Edit / Deactivate / Reset password link)
+
+**"Invite user" button** — opens a modal with name, email, role → sends invitation email with one-time setup link.
+
+**"Sync from Azure AD" button** (visible when SSO is configured) — syncs user list from configured AD groups, provisions new users, updates roles for existing users based on current group membership.
+
+---
+
+## 23. Azure AD / SSO Integration
+
+### 23.1 Purpose
+
+Allow Accenture users to sign in with their standard Microsoft account via Azure AD / Entra ID, removing separate password management. Roles are assigned from Azure AD group membership, enabling role governance through existing IT processes.
+
+### 23.2 Login Page — SSO Configured
+
+When Azure AD credentials are set in Settings, the login page shows a "Sign in with Microsoft" primary button above the email/password form:
+
+```
+┌──────────────────────────────────────────────────┐
+│           [Greenlight wordmark]                  │
+│                                                  │
+│  ┌──────────────────────────────────────────┐    │
+│  │   Sign in with Microsoft                 │ → redirect to Microsoft
+│  └──────────────────────────────────────────┘    │
+│                                                  │
+│        ── or sign in with email ──               │
+│  Email ________________________________________  │
+│  Password ______________________________________  │
+│                              [Sign in]           │
+└──────────────────────────────────────────────────┘
+```
+
+When SSO is not configured, only the email/password form is shown.
+
+### 23.3 SSO Flow
+
+1. User clicks "Sign in with Microsoft"
+2. App generates PKCE verifier + challenge, stores state in an HTTP-only cookie
+3. App redirects to Microsoft's authorization endpoint with: tenant ID, client ID, `redirect_uri`, `scope=openid email profile`, PKCE challenge
+4. User completes Microsoft authentication (existing Accenture SSO session may auto-complete this)
+5. Microsoft redirects to `/api/auth/sso/azure/callback` with auth code + state
+6. App validates state, exchanges code for tokens using PKCE verifier
+7. App decodes the ID token: extracts `email`, `name`, `oid` (Azure object ID), and group memberships
+8. User lookup / provisioning:
+   - Existing user (matched by email or Azure OID): update `last_login`, sync role from group mapping
+   - New user: provision record with role from AD group membership; no group match → Viewer by default
+9. App creates session, sets HTTP-only session cookie
+10. Redirect to `/` (dashboard)
+
+### 23.4 Group-Based Role Mapping
+
+Configured in Settings → Authentication. Groups are evaluated in priority order: Admin → Reviewer → Viewer. If a user belongs to multiple mapped groups, the highest-privilege role wins.
+
+| Azure AD Group | Greenlight Role |
+|---|---|
+| (configured by Admin) | Admin |
+| (configured by Admin) | Reviewer |
+| (configured by Admin) | Viewer |
+
+If a user belongs to no mapped group, they are assigned Viewer by default. The Admin can change this to "Deny access" in Settings.
+
+### 23.5 Session and Sign-Out
+
+- Session duration follows the Settings → Authentication configuration
+- Silent token refresh: when a session nears expiry, Greenlight attempts a background token refresh via Azure AD. If refresh fails (account disabled, token revoked), the session is invalidated and the user is redirected to `/login`
+- Single sign-out: when a user clicks "Sign out", Greenlight invalidates the local session and redirects to Microsoft's logout endpoint to terminate the Azure AD session
+
+### 23.6 Fallback Authentication
+
+Email/password login remains available for:
+- Admin accounts (in case SSO is misconfigured)
+- Service or test accounts
+- Accounts with `fallback_auth_allowed = true` in the users table
+
+Admins can disable email/password login globally for all other accounts in Settings → Authentication.

@@ -25,13 +25,15 @@
 14. [Data Model](#14-data-model)
 15. [API Endpoints](#15-api-endpoints)
 16. [Non-Functional Requirements](#16-non-functional-requirements)
-17. [Out of Scope](#17-out-of-scope)
+17. [Feature Discovery Agent](#17-feature-discovery-agent)
 18. [AI Policy Evaluation Agent](#18-ai-policy-evaluation-agent)
 19. [Reviewer Assignment](#19-reviewer-assignment)
 20. [Notifications](#20-notifications)
 21. [Report Export](#21-report-export)
 22. [Settings Page](#22-settings-page)
 23. [Azure AD / SSO Integration](#23-azure-ad--sso-integration)
+24. [Feature & Settings Identification Agent](#24-feature--settings-identification-agent)
+25. [Product Update Monitoring Agent](#25-product-update-monitoring-agent)
 
 ---
 
@@ -52,13 +54,14 @@ Accenture deploys Microsoft 365 Copilot to tens of thousands of employees. Micro
 ### 1.3 Core Workflow
 
 ```
-Microsoft ships a new Copilot feature
-        ↓
-Admin adds it to Greenlight's feature catalog
+Feature Discovery Agent crawls learn.microsoft.com and Microsoft roadmap sources
+on a schedule → surfaces newly discovered features to admin as suggestions
+        ↓  (or admin adds a feature manually)
+Admin reviews discovered features and adds selected ones to Greenlight's feature catalog
         ↓
 Greenlight creates policy checks for the feature (based on the active policy library)
         ↓
-AI agent automatically searches approved sources, evaluates each check,
+AI Policy Evaluation Agent automatically searches approved sources, evaluates each check,
 and populates findings + evidence with a confidence score
         ↓
 Reviewers review AI findings, correct where needed, and mark checks
@@ -69,6 +72,9 @@ Governance admin makes a final decision: Approve / Hold / Conditional
 Decision is logged in the audit trail; report exported for stakeholders
         ↓
 Feature status is visible on the dashboard
+        ↓
+Product Update Monitoring Agent tracks Microsoft documentation for changes
+to approved features → flags features for re-evaluation when updates detected
 ```
 
 ### 1.4 Tech Stack (Prototype → Production Guidance)
@@ -95,9 +101,17 @@ Feature status is visible on the dashboard
 | **Evidence** | A source document, URL, or excerpt that supports a check's outcome |
 | **Policy Version** | A dated snapshot of the full policy rule library, imported from an Excel file |
 | **Governance Function** | The domain a policy rule belongs to: InfoSec, IT & Architecture, or Legal & Privacy |
-| **Approved Source** | A trusted domain that reviewers are permitted to cite as evidence |
+| **Approved Source** | A trusted domain that reviewers are permitted to cite as evidence and that AI agents are restricted to when searching |
 | **Feature Status** | The overall approval decision for a feature: In Review, Approved, Conditional, or Held |
 | **Audit Log** | A time-stamped record of every meaningful action taken in the system |
+| **AI Agent** | An automated process that uses a Claude language model and web search (restricted to approved sources) to evaluate policy checks, discover new features, or monitor for product updates |
+| **Confidence Score** | A number between 0.0 and 1.0 output by the AI Policy Evaluation Agent indicating how strongly the available evidence supports the verdict assigned to a check |
+| **Agent Run** | A single execution of an AI agent against a feature — records model used, checks evaluated/updated, token counts, and completion status |
+| **Reviewer Assignment** | The mapping of a specific Reviewer user to a governance function on a specific feature — determines who receives notifications and who may edit checks for that function |
+| **SSO** | Single Sign-On via Azure AD / Entra ID — allows Accenture users to sign into Greenlight using their Microsoft credentials |
+| **PKCE** | Proof Key for Code Exchange — the OAuth 2.0 extension used to secure the SSO authorization code flow |
+| **Feature Discovery** | The automated process of crawling Microsoft documentation and roadmap sources to find newly released Copilot features before they are manually added to Greenlight |
+| **Update Detection** | The automated process of re-crawling documentation for features already in Greenlight to detect Microsoft product changes that may affect governance status |
 
 ---
 
@@ -117,13 +131,19 @@ Feature status is visible on the dashboard
 |---|---|---|---|
 | View dashboard | ✅ | ✅ | ✅ |
 | View feature details | ✅ | ✅ | ✅ |
-| Update check status & findings | ✅ | ✅ (own function only) | ❌ |
+| Update check status & findings | ✅ | ✅ (assigned function only) | ❌ |
 | Approve / Hold / Flag a feature | ✅ | ❌ | ❌ |
 | Manage feature catalog | ✅ | ❌ | ❌ |
 | Import / manage policy rules | ✅ | ❌ | ❌ |
 | Manage approved sources | ✅ | ❌ | ❌ |
 | View audit log | ✅ | ✅ | ❌ |
 | Manage user accounts | ✅ | ❌ | ❌ |
+| Trigger AI policy evaluation | ✅ | ❌ | ❌ |
+| Assign reviewers to features | ✅ | ❌ | ❌ |
+| Export PDF / Excel reports | ✅ | ✅ | ❌ |
+| View notifications (own) | ✅ | ✅ | ✅ |
+| Configure settings | ✅ | ❌ | ❌ |
+| Review feature discovery suggestions | ✅ | ❌ | ❌ |
 
 ---
 
@@ -151,6 +171,9 @@ Greenlight is built as a complete, production-ready governance platform in a sin
 - Excel report export (policy library download)
 - Settings page — organization profile, user management, notification configuration, AI agent config, SSO setup (see [Section 22](#22-settings-page))
 - Azure AD / Entra ID SSO with group-to-role mapping (see [Section 23](#23-azure-ad--sso-integration))
+- **Feature Discovery Agent:** scheduled crawl of learn.microsoft.com and Microsoft roadmap to surface new Copilot features for admin review (see [Section 17](#17-feature-discovery-agent))
+- **Feature & Settings Identification Agent:** monitors M365 admin center documentation for new configurable AI/Copilot settings that require governance decisions (see [Section 24](#24-feature--settings-identification-agent))
+- **Product Update Monitoring Agent:** tracks documentation for features already in Greenlight and flags changes requiring re-evaluation (see [Section 25](#25-product-update-monitoring-agent))
 
 ---
 
@@ -267,9 +290,17 @@ All routes except `/login` require authentication. Unauthenticated users are red
 |---|---|
 | `/login` | Anyone (unauthenticated) |
 | `/` | All authenticated users |
-| `/features/[id]` | All authenticated users |
-| `/admin/*` | Admin only — Reviewers and Viewers get a 403 page |
+| `/features/[id]` | All authenticated users (edit actions: Admin + assigned Reviewer) |
+| `/admin/features` | Admin only |
+| `/admin/features/discovered` | Admin only |
+| `/admin/policies` | Admin only |
+| `/admin/policies/[id]` | Admin only |
+| `/admin/policies/import` | Admin only |
+| `/admin/sources` | Admin only |
+| `/admin/settings` | Admin only |
+| `/admin/settings-inventory` | Admin only |
 | `/audit-log` | Admin and Reviewer |
+| All other `/admin/*` | Admin only — Reviewers and Viewers get a 403 page |
 
 ### 6.5 User Management
 
@@ -491,11 +522,11 @@ Right-rail sidebar (fixed width ~280px) visible on the feature detail page.
 **Feature info** (read-only)
 - Type, released date, version, Microsoft owner, policy pack, risk tier
 
-**Review status** (NEW — replaces hardcoded data)
-- Current feature status with timestamp: "Status set to Approved by Marcus Chen on Jun 10, 2026"
+**Review status**
+- Current feature status with timestamp: "Status set to Approved by [Admin Name] on [date]"
 - If the feature has a reason note (from Conditional or Held decision), show it here
 
-**Activity** (NEW — real data from audit log)
+**Activity**
 - Chronological list of the 10 most recent audit events for this feature
 - Each event: timestamp, actor name, description (e.g. "INFOSEC-003 marked as Pass by Priya Sharma")
 - "View full history" link to audit log filtered to this feature
@@ -531,6 +562,8 @@ A card with labeled form fields:
 | Name | Text input | Required |
 | Vendor | Text input | Required |
 | Type | Select dropdown | Required. Feature / Agent / Tool / Model |
+| Summary | Textarea | Optional. Brief description of what the feature does |
+| Documentation URL | URL input | Optional. Primary Microsoft learn.microsoft.com page for this feature — used by the Product Update Monitoring Agent |
 | Preview release | Checkbox | Optional |
 
 **"Add feature" button:**
@@ -559,10 +592,11 @@ Each feature row shows:
 
 **Removing features:**
 - Unchecking the checkbox marks the feature for removal but does not immediately delete it
-- A warning message appears: "X features will be removed — click Sync to apply"
-- Clicking "Sync active / remove unchecked" applies the checkbox state to the database: unchecked features are deleted along with their policy checks
+- A yellow warning banner appears: "X features will be removed — this will permanently delete all their policy checks, findings, and evidence. Click Sync to apply."
+- Clicking "Sync active / remove unchecked" shows a confirmation modal that lists the features to be deleted by name. User must type "REMOVE" to confirm.
+- On confirmation: unchecked features are soft-deleted (`archived_at` set) and their policy checks are archived. Audit events are logged for each removed feature.
 
-**Important:** Adding and editing are immediate (instant save). Removing requires the explicit Sync step to prevent accidental deletion.
+**Important:** Adding and editing are immediate (instant save). Removing requires the explicit Sync step — then the confirmation modal — to prevent accidental data loss.
 
 ### 10.5 Automatically Generated Policy Checks
 
@@ -608,7 +642,7 @@ Rules grouped into cards by governance function (InfoSec / IT & Architecture / L
 - Each rule is a clickable row linking to `/admin/policies/[id]`
 - Row shows: rule ID (monospace), title, applies-to list (truncated), severity badge, chevron
 
-**Empty state:** If no rules exist, show centered empty state with both "+ New rule" and "Import first version" CTAs.
+**Empty state:** If no rules exist, show centered empty state with three CTAs: "+ New rule", "Import first version", and "Download blank template" (downloads a pre-formatted empty Excel file so the admin can fill it in before importing).
 
 ---
 
@@ -749,7 +783,11 @@ This is the main review screen. It shows what will change if the user commits th
 **Diff list:**
 - Filter tabs: All changes / New / Updated / Removed
 - Each rule shown as a card with:
-  - Checkbox (checked = include in commit, unchecked = skip this rule)
+  - Checkbox — behavior depends on action badge:
+    - NEW: checked = add this rule; unchecked = skip (don't add)
+    - UPDATED: checked = apply the update; unchecked = keep the existing version unchanged
+    - REMOVED: checked = remove this rule from the library; unchecked = keep the existing rule despite it not being in the import file
+    - UNCHANGED: always shown, checkbox locked (no action needed)
   - Action badge: NEW (purple) / UPDATED (blue) / REMOVED (pink) / UNCHANGED (gray)
   - Rule ID (monospace)
   - Rule title
@@ -869,6 +907,17 @@ A time-stamped record of all meaningful actions taken in Greenlight. Supports ac
 | `policy.rule_archived` | Individual rule removed | Admin |
 | `source.created` | Approved source domain added | Admin |
 | `source.deleted` | Approved source domain removed | Admin |
+| `user.created` | User account provisioned (manually or via SSO) | Admin / System |
+| `user.role_changed` | User's role updated | Admin |
+| `user.deactivated` | User account deactivated | Admin |
+| `reviewer.assigned` | Reviewer assigned to a feature's governance function | Admin |
+| `reviewer.unassigned` | Reviewer removed from a feature's governance function | Admin |
+| `agent.evaluation_started` | AI policy evaluation run started | Admin / System |
+| `agent.evaluation_completed` | AI policy evaluation run completed successfully | System |
+| `agent.evaluation_failed` | AI policy evaluation run failed | System |
+| `feature.discovered` | Feature Discovery Agent found a new feature suggestion | System |
+| `feature.update_detected` | Product Update Monitoring Agent detected a content change | System |
+| `settings.changed` | Organization settings updated | Admin |
 
 ### 13.3 Log Entry Fields
 
@@ -915,13 +964,16 @@ Each log entry records:
 #### `users` (NEW for MVP)
 ```sql
 CREATE TABLE users (
-  id          TEXT PRIMARY KEY,
-  name        TEXT NOT NULL,
-  email       TEXT UNIQUE NOT NULL,
-  password    TEXT NOT NULL,  -- bcrypt hash
-  role        TEXT NOT NULL CHECK (role IN ('admin', 'reviewer', 'viewer')),
-  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-  last_login  TEXT
+  id                    TEXT PRIMARY KEY,
+  name                  TEXT NOT NULL,
+  email                 TEXT UNIQUE NOT NULL,
+  password              TEXT,          -- bcrypt hash; NULL for SSO-only accounts
+  role                  TEXT NOT NULL CHECK (role IN ('admin', 'reviewer', 'viewer')),
+  azure_oid             TEXT UNIQUE,   -- Azure AD object ID; NULL for local-only accounts
+  fallback_auth_allowed INTEGER NOT NULL DEFAULT 1,  -- 1 = can still use email/password even when SSO enforced
+  archived_at           TEXT,          -- soft-delete; NULL = active account
+  created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+  last_login            TEXT
 );
 ```
 
@@ -1075,6 +1127,60 @@ CREATE TABLE settings (
 );
 ```
 
+#### `invitation_tokens` (NEW)
+One-time setup links for user account activation:
+```sql
+CREATE TABLE invitation_tokens (
+  id          TEXT PRIMARY KEY,
+  user_id     TEXT NOT NULL REFERENCES users(id),
+  token       TEXT UNIQUE NOT NULL,  -- random hex, included in invite email link
+  expires_at  TEXT NOT NULL,         -- 72-hour expiry
+  used_at     TEXT,                  -- NULL = unused
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
+#### `user_notification_preferences` (NEW)
+Per-user, per-event-type, per-channel notification settings:
+```sql
+CREATE TABLE user_notification_preferences (
+  user_id    TEXT NOT NULL REFERENCES users(id),
+  event_type TEXT NOT NULL,          -- matches event types in Section 20
+  channel    TEXT NOT NULL CHECK (channel IN ('email', 'teams')),  -- 'inapp' is always on
+  enabled    INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (user_id, event_type, channel)
+);
+```
+
+#### `features` additions (documentation and monitoring)
+```sql
+ALTER TABLE features ADD COLUMN summary           TEXT;    -- brief description of the feature
+ALTER TABLE features ADD COLUMN documentation_url TEXT;    -- primary Microsoft learn.microsoft.com page
+ALTER TABLE features ADD COLUMN last_monitored_at TEXT;    -- when Product Update Agent last checked
+ALTER TABLE features ADD COLUMN content_hash      TEXT;    -- hash of last-seen documentation content
+```
+
+#### `feature_discovery_suggestions` (NEW)
+Features surfaced by the Feature Discovery Agent awaiting admin review:
+```sql
+CREATE TABLE feature_discovery_suggestions (
+  id               TEXT PRIMARY KEY,
+  name             TEXT NOT NULL,
+  vendor           TEXT NOT NULL DEFAULT 'Microsoft',
+  type             TEXT,                -- Feature | Agent | Tool | Model (agent's best guess)
+  summary          TEXT,
+  documentation_url TEXT NOT NULL,
+  source_domain    TEXT NOT NULL,       -- which approved source this was found on
+  discovered_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  status           TEXT NOT NULL DEFAULT 'pending'  -- 'pending' | 'accepted' | 'dismissed' | 'snoozed'
+    CHECK (status IN ('pending', 'accepted', 'dismissed', 'snoozed')),
+  snoozed_until    TEXT,
+  reviewed_by      TEXT REFERENCES users(id),
+  reviewed_at      TEXT,
+  feature_id       TEXT REFERENCES features(id)  -- set when accepted and added to catalog
+);
+```
+
 ---
 
 ## 15. API Endpoints
@@ -1089,6 +1195,19 @@ CREATE TABLE settings (
 #### Authentication
 - `POST /api/auth/login` — Validate credentials, create session
 - `POST /api/auth/logout` — Invalidate session
+
+#### User Management
+- `GET /api/users` — List all users (Admin only)
+- `PATCH /api/users/[id]` — Update user name, email, or role (Admin only)
+- `DELETE /api/users/[id]` — Deactivate user account — sets `archived_at` (Admin only)
+- `POST /api/users/invite` — Create invitation token and send setup email (Admin only); body: `{ name, email, role }`
+- `GET /api/invitations/[token]` — Validate invitation token (unauthenticated); returns `{ valid, name, email }`
+- `POST /api/invitations/[token]/accept` — Complete account setup: set password, mark token used (unauthenticated); body: `{ password }`
+- `POST /api/users/[id]/reset-password` — Send password reset email to user (Admin only)
+
+#### Notification Preferences
+- `GET /api/users/me/notification-preferences` — Get the current user's notification preferences
+- `PATCH /api/users/me/notification-preferences` — Update preferences; body: `{ event_type, channel, enabled }`
 
 #### Feature Status
 - `PATCH /api/features/[id]/status` — Update feature approval status
@@ -1192,6 +1311,17 @@ CREATE TABLE settings (
 
 - `GET /api/auth/sso/azure/callback` — Handle OAuth callback: validate state, exchange code, provision user, create session; redirects to `/` on success
 
+### New — Feature Discovery Agent
+
+- `POST /api/agents/discovery/run` — Trigger a manual feature discovery scan (Admin only); returns `{ run_id }`
+- `GET /api/features/suggestions` — List feature discovery suggestions (Admin only); query params: `status?`, `limit?`, `offset?`
+- `PATCH /api/features/suggestions/[id]` — Accept, dismiss, or snooze a suggestion (Admin only); body: `{ action: 'accept' | 'dismiss' | 'snooze', snooze_days?: number }`
+
+### New — Product Update Monitoring Agent
+
+- `POST /api/agents/monitor/run` — Trigger a manual monitoring scan for all tracked features (Admin only)
+- `POST /api/agents/monitor/features/[id]` — Trigger monitoring scan for a specific feature (Admin only)
+
 ---
 
 ## 16. Non-Functional Requirements
@@ -1231,16 +1361,96 @@ CREATE TABLE settings (
 
 ---
 
-## 17. Out of Scope
+## 17. Feature Discovery Agent
 
-The following capabilities are explicitly not planned for any release:
+**Route:** `/admin/features/discovered`  
+**Access:** Admin only
 
-| Capability | Reason |
+### 17.1 Purpose
+
+The Feature Discovery Agent crawls approved Microsoft documentation sources on a configurable schedule to find newly released Copilot features, agents, and integrations that Accenture has not yet added to Greenlight. It surfaces these as a suggestion queue so admins can review and add relevant features to the catalog — replacing the need to manually monitor Microsoft release notes.
+
+### 17.2 Discovery Sources
+
+The agent crawls only domains present in the `approved_sources` list. Recommended sources to seed for feature discovery:
+
+| Domain | What it contains |
 |---|---|
-| Mobile / tablet responsive layout | Greenlight is a desktop-only admin and reviewer tool |
-| Multi-tenant / team workspaces | Single-tenant deployment scoped to Accenture's internal environment |
-| Microsoft Graph API write access (deploying or blocking Copilot features) | Greenlight records governance decisions; it does not control Microsoft 365 configuration directly |
-| Public API / webhooks for external system integration | Not required for initial deployment |
+| `learn.microsoft.com` | Feature documentation, Copilot feature pages, release announcements |
+| `techcommunity.microsoft.com` | Microsoft 365 blog posts, new feature announcements |
+| `support.microsoft.com` | Feature availability and rollout pages |
+
+Discovery source scanning is configured separately from policy evaluation search — both are restricted to the `approved_sources` list but the discovery agent focuses on feature catalogue pages rather than evidence documents.
+
+### 17.3 What the Agent Extracts
+
+For each page or article identified as announcing a new feature:
+- Feature name
+- Type classification (Feature / Agent / Tool / Model) — inferred from content
+- Vendor (always Microsoft for these sources)
+- Summary — a 1–2 sentence description extracted or summarized from the page
+- Documentation URL — the canonical page URL
+- Release date (if detectable)
+- Product area (e.g. "Microsoft 365 Copilot", "Copilot Studio", "Teams")
+
+### 17.4 Deduplication
+
+Before creating a suggestion, the agent checks for duplicates:
+1. Exact URL match against `feature_discovery_suggestions.documentation_url`
+2. Exact URL match against `features.documentation_url`
+3. Fuzzy name match (Levenshtein ≥ 0.85) against existing features
+
+If a match is found, the suggestion is suppressed (not re-surfaced).
+
+### 17.5 Trigger Modes
+
+| Trigger | Who | When |
+|---|---|---|
+| Scheduled | System | Configurable: off / daily / weekly (set in Settings → Agent) |
+| Manual scan | Admin | "Scan for new features" button on `/admin/features/discovered` |
+
+### 17.6 Suggestion Queue UI (`/admin/features/discovered`)
+
+```
+[Breadcrumb: Features › Discovered]
+[Page title: "Discovered features"]
+[Subtitle: "X suggestions pending review · Last scan: {relative time}"]
+["Scan for new features" button (Admin)]
+
+[Filter bar: Status (Pending / Accepted / Dismissed) | Source domain]
+
+[Suggestion cards — one per discovered feature]
+```
+
+**Each suggestion card shows:**
+- Feature name + inferred type badge
+- Summary (1–2 sentences)
+- Source domain and documentation URL (clickable)
+- Discovered date
+- Action buttons:
+  - **Accept** — opens a pre-filled "Add feature" form (fields populated from the suggestion); on save, creates the feature, links `feature_discovery_suggestions.feature_id`, marks suggestion as `accepted`
+  - **Dismiss** — marks as `dismissed` (never re-surface this URL); shows undo for 5 seconds
+  - **Snooze** — marks as `snoozed` with a configurable re-surface date (7 / 30 / 90 days)
+
+**Empty state (no pending suggestions):**
+"No new features found. The last scan ran {time}. Run a new scan to check for updates."
+
+### 17.7 Notification
+
+When the discovery agent finds new suggestions, an in-app notification is created for all Admin users:
+- Event type: `feature.discovered` (see Section 20)
+- Message: "Feature Discovery Agent found {N} new Copilot feature(s) to review"
+- Links to `/admin/features/discovered`
+
+### 17.8 Agent Settings (in `/admin/settings` → Agent)
+
+| Setting | Control | Default |
+|---|---|---|
+| Feature discovery schedule | Select: Off / Daily / Weekly | Weekly |
+| Auto-add discovered features | Toggle | Off |
+| Minimum sources scanned per run | Number (1–50) | 10 |
+
+When **Auto-add** is enabled, the agent bypasses the suggestion queue and directly adds discovered features to the catalog (they still appear in the suggestions list as `accepted`). This mode is recommended only after the source list has been carefully curated.
 
 ---
 
@@ -1314,10 +1524,14 @@ Lists all runs for the feature, newest first. Each row: timestamp, triggered by,
 |---|---|---|
 | AI model | Select: claude-opus-4-8 / claude-sonnet-4-6 / claude-haiku-4-5 | claude-opus-4-8 |
 | Max sources per check | Number input (1–20) | 5 |
-| Confidence threshold (auto-pass) | Number input (0.0–1.0) | 0.90 |
+| Confidence threshold (highlight) | Number input (0.0–1.0) | 0.90 |
 | Auto-evaluate on new feature | Toggle | On |
 | Scheduled re-evaluation | Toggle + day + time picker | Off |
 | Anthropic API key | Password input (encrypted at rest) | — |
+
+**Note on Confidence Threshold:** The threshold is a display/highlight threshold, not an auto-approval gate. Checks where the agent's confidence score meets or exceeds this threshold are highlighted with a green confidence badge ("high confidence") to help reviewers quickly identify checks the agent is most certain about. All checks — regardless of confidence — still require human review before a feature can be approved. The agent never automatically approves features.
+
+**Note on missing API key:** If the Anthropic API key is not configured in Settings, the "Run evaluation" button on the feature detail page is disabled and shows a tooltip: "Configure your Anthropic API key in Settings → Agent to enable AI evaluation." Scheduled and automatic evaluation runs are silently skipped until the key is configured.
 
 ---
 
@@ -1357,10 +1571,11 @@ For the current user, features they are assigned to show an "Assigned to you" pi
 
 ### 19.5 Role-Based Check Editing Enforcement
 
-When assignments are configured (and enforcement is enabled in Settings):
+When assignments are configured and "Enforce reviewer assignments" is enabled in Settings → Organization:
 - Reviewer users can only edit checks in functions they are assigned to on that specific feature
 - Unassigned function checks are greyed out in the UI with a tooltip: "Assigned to [Name]" or "Unassigned — contact Admin"
 - Admins always retain full edit access regardless of assignment
+- When enforcement is **disabled** (default), any Reviewer can edit any check on any feature — assignments are advisory only (notifications still fire)
 
 ---
 
@@ -1380,7 +1595,7 @@ Keep reviewers and admins informed of key governance events without requiring co
 | `feature.approved` | All assigned reviewers | "[Feature] has been approved for deployment" |
 | `feature.held` | All assigned reviewers | "[Feature] has been blocked by [Admin Name]" |
 | `feature.conditional` | All assigned reviewers | "[Feature] has been conditionally approved" |
-| `function.complete` | Admin | "All [Function] checks for [Feature] are now complete" |
+| `function.complete` | Admin | "All [Function] checks for [Feature] are now complete" — fires when every check in a governance function transitions out of "Needs Info" status (i.e., all are Pass, Fail, or Conditional) |
 | `check.flagged_fail` | Admin + assigned function reviewer | "[Check title] has been marked Fail on [Feature]" |
 | `policy.version_imported` | All Reviewers | "New policy version [label] imported — [N] rules changed" |
 | `agent.evaluation_complete` | Admin | "AI evaluation of [Feature] complete — [N] checks updated" |
@@ -1388,7 +1603,7 @@ Keep reviewers and admins informed of key governance events without requiring co
 
 ### 20.3 Delivery Channels
 
-**In-app:** Bell icon in the top nav bar with unread count badge. Clicking opens a panel (newest first) with icon, subject, relative timestamp, and a link to the relevant page. "Mark as read" per notification and "Mark all as read" bulk action.
+**In-app:** Bell icon in the top nav bar with unread count badge. Clicking opens a panel (newest first) showing the 20 most recent notifications with icon, subject, relative timestamp, and a link to the relevant page. "Mark as read" per notification and "Mark all as read" bulk action. A "View all" link at the bottom navigates to `/notifications` (full paginated history).
 
 **Email:** One email per event to each recipient. Includes a "View in Greenlight" link. Sent via configured SMTP or SendGrid.
 
@@ -1441,7 +1656,7 @@ Export a feature's complete governance record as PDF for stakeholder distributio
 - Reviewer assignments at time of report
 - Agent run history summary
 
-**Format:** PDF, A4/Letter. Accent color `#A100FF` used for section headers. System sans-serif or embedded font matching the UI.
+**Format:** PDF, A4/Letter. Accent color `#A100FF` used for section headers. Generated server-side using Puppeteer (headless Chromium renders an HTML template, then `page.pdf()` produces the file). This ensures fonts, colors, and layout exactly match the UI. The PDF is streamed directly to the browser response — not stored on disk. If generation fails (e.g., Puppeteer not available in the deployment environment), the endpoint returns a 500 with a user-visible error: "PDF generation failed — contact your administrator." As a fallback, the Excel report remains available.
 
 ### 21.3 Excel Policy Library Export
 
@@ -1478,6 +1693,7 @@ Central console for configuring Greenlight's organization profile, authenticatio
 | Organization logo | File upload (PNG/SVG ≤ 500 KB) | Shown in nav bar and PDF cover |
 | Support email | Email input | "From" address for notification emails |
 | Greenlight base URL | URL input | Used in email/Teams notification links |
+| Enforce reviewer assignments | Toggle | When on, Reviewers can only edit checks in their assigned governance function (see Section 19.5). Default: Off |
 
 ### 22.4 Authentication
 
@@ -1489,8 +1705,8 @@ Central console for configuring Greenlight's organization profile, authenticatio
 | Azure AD client ID | Text input | From Azure AD app registration |
 | Azure AD client secret | Password input (masked, encrypted at rest) | |
 | Group → role mapping | Table: Group ID/Name → Admin/Reviewer/Viewer | Add/remove rows |
-| Test SSO connection | Button | Validates config, shows success or error inline |
-| Disable email/password login | Toggle | Except for accounts marked `fallback_auth_allowed` |
+| Test SSO connection | Button | Uses the currently-entered (not yet saved) field values to attempt an OAuth metadata fetch against Microsoft's well-known endpoint. Shows "Connection validated" or an error inline without saving any values |
+| Disable email/password login | Toggle | When on, only SSO sign-in is available. Accounts with `fallback_auth_allowed = true` are exempt |
 
 ### 22.5 Agent
 
@@ -1514,11 +1730,16 @@ See [Section 18.7](#187-agent-settings-in-adminsettings--agent) for the full fie
 
 Embedded user management (replaces a standalone `/admin/users` page).
 
-**User table columns:** Name · Email · Role (editable select) · Last login · Status · Actions (Edit / Deactivate / Reset password link)
+**User table columns:** Name · Email · Role (editable inline select) · Last login · Status · Actions
 
-**"Invite user" button** — opens a modal with name, email, role → sends invitation email with one-time setup link.
+- **Status**: Active / Pending (invited but setup not completed) / Inactive (archived)
+- **Actions**: Edit name/email, Deactivate (sets `archived_at`, revokes sessions), Reset password (sends email with setup link)
 
-**"Sync from Azure AD" button** (visible when SSO is configured) — syncs user list from configured AD groups, provisions new users, updates roles for existing users based on current group membership.
+**"Invite user" button** — opens a modal with name, email, role → sends invitation email with a one-time setup link (valid 72 hours). The user appears in the table with status "Pending" until they complete account setup.
+
+**"Sync from Azure AD" button** (visible when SSO is configured) — syncs user list from configured AD groups, provisions new users, updates roles for existing users based on current group membership. Shows a preview of changes before applying.
+
+**Deactivated users** retain all their audit log entries and check edits; their name is shown as "[Deactivated user]" in the UI where relevant.
 
 ---
 
@@ -1557,7 +1778,7 @@ When SSO is not configured, only the email/password form is shown.
 4. User completes Microsoft authentication (existing Accenture SSO session may auto-complete this)
 5. Microsoft redirects to `/api/auth/sso/azure/callback` with auth code + state
 6. App validates state, exchanges code for tokens using PKCE verifier
-7. App decodes the ID token: extracts `email`, `name`, `oid` (Azure object ID), and group memberships
+7. App decodes the ID token: extracts `email`, `name`, `oid` (Azure object ID). **Note on group membership:** Azure AD only includes group claims in the ID token if the app registration is configured to emit them (and the tenant has ≤ 150 groups). For larger tenants, the app must call the Microsoft Graph API (`GET /v1.0/me/memberOf`) using the access token to retrieve groups. Greenlight must handle both paths: check for groups in the ID token first; fall back to a Graph API call if not present
 8. User lookup / provisioning:
    - Existing user (matched by email or Azure OID): update `last_login`, sync role from group mapping
    - New user: provision record with role from AD group membership; no group match → Viewer by default
@@ -1590,3 +1811,160 @@ Email/password login remains available for:
 - Accounts with `fallback_auth_allowed = true` in the users table
 
 Admins can disable email/password login globally for all other accounts in Settings → Authentication.
+
+---
+
+## 24. Feature & Settings Identification Agent
+
+**Route:** `/admin/settings-inventory`  
+**Access:** Admin only
+
+### 24.1 Purpose
+
+Microsoft regularly adds new configurable settings, policy controls, and toggle switches to the M365 admin center that affect how Copilot and AI features behave. The Feature & Settings Identification Agent monitors Microsoft's admin center documentation and release notes to maintain a living inventory of these settings — so Accenture's governance team always knows what can be turned on or off, and which settings carry governance implications that need a policy decision.
+
+This is distinct from the Feature Discovery Agent (Section 17), which discovers Copilot features to add to the governance catalog. This agent focuses on **admin-level settings and controls** that affect the behavior of already-deployed features.
+
+### 24.2 What the Agent Monitors
+
+Sources crawled (restricted to approved_sources list):
+
+| Domain | What it contains |
+|---|---|
+| `learn.microsoft.com/microsoft-365/admin` | M365 admin center docs, policy controls |
+| `learn.microsoft.com/microsoft-365-copilot` | Copilot-specific admin settings |
+| `admin.microsoft.com` (docs only) | Admin center feature documentation |
+
+For each setting or policy control identified:
+- Setting name and description
+- Location in M365 admin center (navigation path, e.g. "Settings → Org settings → Microsoft Copilot")
+- Governance function relevance (InfoSec / IT / Legal — inferred from content)
+- Data handling implications (e.g. "affects data sent to Microsoft", "controls external sharing")
+- Link to official documentation
+- Date first detected
+
+### 24.3 Settings Inventory UI (`/admin/settings-inventory`)
+
+```
+[Breadcrumb: Admin › Settings Inventory]
+[Page title: "M365 Settings Inventory"]
+[Subtitle: "{N} settings tracked · {N} need governance decision · Last updated: {date}"]
+["Scan for new settings" button]
+
+[Filter bar: Governance function | Review status | Search]
+
+[Settings cards — grouped by governance function]
+```
+
+**Each setting card shows:**
+- Setting name + governance function badge
+- Description (1–3 sentences from documentation)
+- Admin center navigation path
+- Governance review status pill:
+  - **Needs Decision** — newly discovered or changed; admin has not yet set a governance stance
+  - **Reviewed** — admin has documented a stance
+  - **Changes Detected** — setting previously reviewed but documentation indicates Microsoft changed it
+- Admin's governance stance (when Reviewed): Approved / Blocked / Conditional (free-text note)
+- "Mark as reviewed" / "Update stance" action
+
+### 24.4 Governance Stance
+
+For each setting, an Admin can record Accenture's organizational stance:
+
+| Stance | Meaning |
+|---|---|
+| Approved | This setting is authorized for use; governance team has reviewed it |
+| Blocked | This setting must not be enabled; governance team has blocked it |
+| Conditional | Approved under specific conditions (document conditions in notes) |
+
+Recording a stance creates an audit log event (`settings.changed`).
+
+### 24.5 Trigger Modes
+
+| Trigger | Who | When |
+|---|---|---|
+| Scheduled | System | Configurable: off / weekly (set in Settings → Agent) |
+| Manual scan | Admin | "Scan for new settings" button |
+
+### 24.6 Notifications
+
+When new settings are discovered or existing settings show content changes:
+- Event type: `feature.discovered` (reuses existing type; subject indicates it's a settings discovery)
+- Recipients: All Admins
+- Message: "Settings Identification Agent found {N} new/changed admin settings that need governance review"
+
+### 24.7 Agent Settings (in `/admin/settings` → Agent)
+
+| Setting | Control | Default |
+|---|---|---|
+| Settings inventory schedule | Select: Off / Weekly | Weekly |
+
+---
+
+## 25. Product Update Monitoring Agent
+
+**Route:** Feature detail page (monitoring status indicator) + Settings → Agent  
+**Access:** Trigger manual scan — Admin only. View monitoring status — Admin + Reviewer.
+
+### 25.1 Purpose
+
+After Accenture approves a feature, Microsoft may later change how it works — updating its data handling, adding new capabilities, changing privacy controls, or modifying sharing behavior. The Product Update Monitoring Agent tracks the primary documentation page for each feature in Greenlight and alerts the governance team when substantive content changes are detected, ensuring that approved features remain compliant over time.
+
+### 25.2 How Change Detection Works
+
+1. Agent retrieves the feature's `documentation_url`
+2. Fetches the current page content
+3. Computes a semantic hash of the relevant page sections (excluding navigation, ads, "last updated" dates, and other boilerplate)
+4. Compares against `features.content_hash` (the last stored hash)
+5. If the hash has changed, extracts a summary of what changed using a brief Claude analysis of the diff
+6. Updates `features.content_hash` and `features.last_monitored_at`
+7. If a substantive change is detected:
+   - Sets a `monitoring_flag` on the feature (displayed in the UI as a banner)
+   - Creates an audit log entry: `feature.update_detected`
+   - Sends notification to Admin and assigned reviewers (all functions)
+   - Optionally triggers a new AI policy evaluation run (if auto-trigger is enabled in Settings)
+
+**Note:** Features with no `documentation_url` are skipped. The feature detail page shows a "No documentation URL configured — not monitored" indicator for these features.
+
+### 25.3 UI — Feature Detail Page
+
+**Monitoring status indicator** (shown in the Feature Metadata Bar):
+- Green dot + "Monitored — last checked {relative time}" — when no changes detected
+- Orange dot + "Update detected {date}" — when a change has been flagged
+- Gray dot + "Not monitored" — when no `documentation_url` is set
+
+**Update detected banner** (shown at top of feature detail page when flagged):
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  ⚠️  Microsoft has updated documentation for this feature.          │
+│  Detected: {date}. Changes may affect governance status.           │
+│  [View changes summary]  [Dismiss]  [Trigger re-evaluation]        │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+- "View changes summary" — expands a panel showing the Claude-generated summary of what changed in the documentation
+- "Dismiss" — clears the flag (Admin only); creates an audit event; the feature continues to be monitored on future runs
+- "Trigger re-evaluation" — starts a new AI policy evaluation run (Admin only)
+
+### 25.4 Trigger Modes
+
+| Trigger | Who | When |
+|---|---|---|
+| Scheduled | System | Configurable: off / weekly / daily (set in Settings → Agent) |
+| Manual (all features) | Admin | "Scan all features for updates" in Settings → Agent or via `POST /api/agents/monitor/run` |
+| Manual (one feature) | Admin | "Check for updates" button on feature detail page header (Admin only) |
+
+### 25.5 Minimum Change Threshold
+
+To avoid noise from trivial content changes (typo fixes, formatting updates, navigation changes), the agent applies a minimum change threshold before flagging a feature. This is configurable in Settings → Agent.
+
+- Default: 10% of monitored content sections must differ to trigger a flag
+- Below threshold: update `content_hash` and `last_monitored_at` silently (no notification, no flag)
+
+### 25.6 Agent Settings (in `/admin/settings` → Agent)
+
+| Setting | Control | Default |
+|---|---|---|
+| Product update monitoring schedule | Select: Off / Daily / Weekly | Weekly |
+| Minimum content change threshold | Number input (1–50%) | 10% |
+| Auto-trigger AI re-evaluation on update detected | Toggle | Off |

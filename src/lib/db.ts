@@ -8,6 +8,7 @@ import { slugifyId } from './catalog-format'
 import { generateChecksForFeature } from './check-generator'
 import type { SourceEntry } from './source-format'
 import type { CanonicalRule } from './policyParser/types'
+import { parseXlsxBuffer } from './policyParser'
 
 const DB_PATH = path.join(process.cwd(), 'data', 'greenlight.db')
 
@@ -32,8 +33,27 @@ function getDb(): Database.Database {
   if (!migrationDone) {
     migrateSchema(globalThis.__greenlightDb)
     migrationDone = true
+    seedPolicyLibrary(globalThis.__greenlightDb)
   }
   return globalThis.__greenlightDb
+}
+
+const SEED_CHECKLIST = path.join(process.cwd(), 'policies', 'Microsoft Copilot Governance Checklist.xlsx')
+
+// Fresh databases get the checklist committed in policies/ as v1.0. Keyed on policy_versions
+// (not rule count) so a library the admin has deliberately emptied is never re-imported.
+function seedPolicyLibrary(db: Database.Database) {
+  const { n } = db.prepare('SELECT COUNT(*) as n FROM policy_versions').get() as { n: number }
+  if (n > 0 || !fs.existsSync(SEED_CHECKLIST)) return
+  const parsed = parseXlsxBuffer(fs.readFileSync(SEED_CHECKLIST), path.basename(SEED_CHECKLIST), [])
+  if (parsed.rules.length === 0) return
+  commitPolicyVersion({
+    versionLabel: 'v1.0',
+    filename: path.basename(SEED_CHECKLIST),
+    notes: 'Auto-imported on first run',
+    rulesToUpsert: parsed.rules,
+    ruleIdsToArchive: [],
+  })
 }
 
 function migrateSchema(db: Database.Database) {

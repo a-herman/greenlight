@@ -1,36 +1,49 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Greenlight
 
-## Getting Started
+AI governance dashboard for reviewing Microsoft 365 Copilot features and agents against an enterprise policy library. The full product spec is in [REQUIREMENTS.md](REQUIREMENTS.md), and UI screenshots are in [screenshots/](screenshots/).
 
-First, run the development server:
+## Prerequisites
+
+- **Node.js 20+** (developed on Node 25): `brew install node`
+- **Git**: `brew install git`
+- **macOS:** Xcode command-line tools (`xcode-select --install`). These are needed to compile `better-sqlite3`.
+
+## Setup
 
 ```bash
+git clone https://github.com/a-herman/greenlight.git
+cd greenlight
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Data
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+No separate seed or import step is needed. On first run the app creates `data/greenlight.db` (SQLite) and fills it with:
 
-## Learn More
+| Data | Source |
+|---|---|
+| 7 Copilot features, 97 policy checks, 32 evidence citations | `src/lib/seed-data.ts` |
+| Policy library: 52 rules, imported as version **v1.0** | `policies/Microsoft Copilot Governance Checklist.xlsx` |
 
-To learn more about Next.js, take a look at the following resources:
+The policy library is imported only when the database has no policy versions yet. After that, manage the rules in the app at **Policies**, either by editing rules individually or with **Import new version** for an updated spreadsheet.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+`data/` is git-ignored, so edits made in the app stay on your machine.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- **Reset to a clean state:** stop the server, delete `data/`, and run `npm run dev` again.
+- **Keep your edits when moving machines:** copy `data/greenlight.db` across.
 
-## Deploy on Vercel
+## Scripts
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Command | What it does |
+|---|---|
+| `npm run dev` | Start the dev server on port 3000 |
+| `npm run build` / `npm start` | Production build and serve |
+| `npm run lint` | ESLint |
+| `node scripts/screenshot.mjs` | Regenerate `screenshots/` (needs the dev server running, plus `npm i -D playwright && npx playwright install chromium`) |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Notes for developers
+
+This project uses **Next.js 16**, which has breaking changes from earlier versions. For example, route `params` is a Promise and must be awaited. Read the guides in `node_modules/next/dist/docs/` before changing framework code (see [AGENTS.md](AGENTS.md)).

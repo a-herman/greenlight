@@ -2,6 +2,8 @@
 
 AI governance dashboard for reviewing Microsoft 365 Copilot features and agents against an enterprise policy library. The full product spec is in [REQUIREMENTS.md](REQUIREMENTS.md), and UI screenshots are in [screenshots/](screenshots/).
 
+> **New computer?** Follow [docs/NEW-COMPUTER-SETUP.md](docs/NEW-COMPUTER-SETUP.md) for full machine setup (Homebrew, Node, VS Code, Claude Code, GitHub).
+
 ## Prerequisites
 
 - **Node.js 20+** (developed on Node 25): `brew install node`
